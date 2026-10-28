@@ -1,0 +1,118 @@
+name: Export GT8 Kernel Build Info
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and export GT8 diagnostics
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            aria2 unzip bc bison flex \
+            libssl-dev libelf-dev \
+            build-essential ccache
+
+      - name: Download official GT8 Common source
+        run: |
+          mkdir -p workspace
+          cd workspace
+
+          aria2c -s16 -x16 -k1M \
+            https://github.com/realme-kernel-opensource/realme_GT8-AndroidB-common-source/archive/refs/heads/master.zip \
+            -o common.zip
+
+          unzip -q common.zip
+          mv realme_GT8-AndroidB-common-source-master common
+
+      - name: Download LLVM Clang r510928
+        run: |
+          cd workspace
+
+          aria2c -s16 -x16 -k1M \
+            https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip \
+            -o clang.zip
+
+          unzip -q clang.zip -d clang18
+
+      - name: Configure and build Common kernel
+        run: |
+          cd workspace/common
+
+          export PATH="$GITHUB_WORKSPACE/workspace/clang18/bin:$PATH"
+
+          make -j"$(nproc)" \
+            LLVM=1 \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CC=clang \
+            LD=ld.lld \
+            HOSTLD=ld.lld \
+            O=out \
+            KCFLAGS+=-Wno-error \
+            gki_defconfig
+
+          make -j"$(nproc)" \
+            LLVM=1 \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CC=clang \
+            LD=ld.lld \
+            HOSTLD=ld.lld \
+            O=out \
+            KCFLAGS+=-Wno-error \
+            Image modules_prepare
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          mkdir -p artifacts
+
+          cp -f workspace/common/out/.config artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/Module.symvers artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/System.map artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/vmlinux artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/modules.order artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/modules.builtin artifacts/ 2>/dev/null || true
+          cp -f workspace/common/out/arch/arm64/boot/Image artifacts/ 2>/dev/null || true
+
+          find workspace/common/out \
+            -type f \
+            \( -name '*.ko' -o -name 'Module.symvers' \) \
+            -exec cp --parents {} artifacts/ \; \
+            2>/dev/null || true
+
+          {
+            echo "=== Commit ==="
+            git -C workspace/common rev-parse HEAD || true
+            echo
+            echo "=== Compiler ==="
+            "$GITHUB_WORKSPACE/workspace/clang18/bin/clang" --version || true
+            echo
+            echo "=== Kernel release ==="
+            strings workspace/common/out/arch/arm64/boot/Image 2>/dev/null \
+              | grep -m1 'Linux version' || true
+            echo
+            echo "=== Config ==="
+            grep -E 'CONFIG_(MODVERSIONS|MODULES|ARM64_4K_PAGES)' \
+              workspace/common/out/.config 2>/dev/null || true
+          } > artifacts/build-info.txt
+
+          find artifacts -type f -printf '%P %s bytes\n' \
+            | sort > artifacts/files.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gt8-kernel-build-diagnostics
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
