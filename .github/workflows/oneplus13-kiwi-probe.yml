@@ -1,0 +1,143 @@
+name: OnePlus 13 Kiwi source probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Sync OnePlus 13 sources and query Kiwi target
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Install repo and basic tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            repo \
+            python3 \
+            ca-certificates \
+            curl
+
+      - name: Initialize and sync OnePlusOSS manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$GITHUB_WORKSPACE/oneplus13"
+          cd "$GITHUB_WORKSPACE/oneplus13"
+
+          repo init \
+            -u https://github.com/OnePlusOSS/kernel_manifest.git \
+            -b oneplus/sm8750 \
+            -m oneplus_13_b.xml
+
+          repo sync -c -j4 --no-tags --fail-fast
+
+      - name: Record source revisions and check WLAN files
+        if: always()
+        shell: bash
+        run: |
+          set -u
+
+          ROOT="$GITHUB_WORKSPACE/oneplus13"
+          DIAG="$GITHUB_WORKSPACE/kiwi-probe"
+          mkdir -p "$DIAG"
+
+          {
+            echo "=== Workflow ==="
+            echo "workflow_repo=$GITHUB_REPOSITORY"
+            echo "workflow_commit=$GITHUB_SHA"
+            echo "runner=$(uname -a)"
+            echo
+
+            echo "=== Manifest ==="
+            if [ -d "$ROOT/.repo" ]; then
+              (
+                cd "$ROOT"
+                repo manifest -r
+              ) > "$DIAG/manifest-locked.xml" 2>&1 || true
+              echo "Locked manifest saved if sync initialized."
+            else
+              echo "repo initialization did not complete."
+            fi
+            echo
+
+            echo "=== Source revisions ==="
+            for d in \
+              "$ROOT/kernel_platform/common" \
+              "$ROOT/kernel_platform/msm-kernel" \
+              "$ROOT"
+            do
+              echo "--- $d"
+              if [ -d "$d/.git" ] || [ -f "$d/.git" ]; then
+                git -C "$d" remote -v || true
+                git -C "$d" rev-parse HEAD || true
+                git -C "$d" log -1 --format='%ci %s' || true
+              else
+                echo "Git checkout not found."
+              fi
+            done
+            echo
+
+            echo "=== WLAN paths ==="
+            for p in \
+              vendor/qcom/opensource/wlan/qcacld-3.0 \
+              vendor/qcom/opensource/wlan/qca-wifi-host-cmn \
+              vendor/qcom/opensource/wlan/fw-api \
+              vendor/qcom/opensource/wlan/platform \
+              vendor/oplus/kernel/wifi/wonder
+            do
+              if [ -e "$ROOT/$p" ]; then
+                echo "PRESENT $p"
+              else
+                echo "MISSING $p"
+              fi
+            done
+            echo
+
+            echo "=== Kiwi definitions ==="
+            find "$ROOT/vendor/qcom/opensource/wlan" \
+              -type f \
+              \( -iname '*kiwi*' -o -name '*modules.bzl' \) \
+              -print 2>/dev/null | head -200 || true
+          } > "$DIAG/source-info.txt"
+
+      - name: Query Kiwi Bazel targets
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE/oneplus13"
+          DIAG="$GITHUB_WORKSPACE/kiwi-probe"
+          mkdir -p "$DIAG"
+
+          cd "$ROOT/kernel_platform"
+
+          test -x ./tools/bazel || {
+            echo "Missing kernel_platform/tools/bazel" | tee "$DIAG/query-error.txt"
+            exit 1
+          }
+
+          ./tools/bazel query \
+            'filter("sun_.*kiwi", //vendor/qcom/opensource/wlan/qcacld-3.0:all)' \
+            > "$DIAG/kiwi-targets.txt" \
+            2> "$DIAG/bazel-query.log"
+
+          cat "$DIAG/kiwi-targets.txt"
+
+      - name: Upload source and query diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oneplus13-kiwi-source-probe
+          path: kiwi-probe/
+          if-no-files-found: warn
+          retention-days: 14
