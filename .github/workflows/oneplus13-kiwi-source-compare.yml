@@ -1,0 +1,84 @@
+name: OnePlus 13 Kiwi source comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Fetch pinned source metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/src" "$GITHUB_WORKSPACE/report"
+          cd "$GITHUB_WORKSPACE/src"
+          fetch_commit() {
+            local url="$1" commit="$2" dir="$3"
+            mkdir -p "$dir"
+            git -C "$dir" init -q
+            git -C "$dir" remote add origin "$url"
+            git -C "$dir" -c protocol.version=2 fetch --depth=1 --filter=blob:none origin "$commit"
+            git -C "$dir" update-ref HEAD FETCH_HEAD
+            test "$(git -C "$dir" rev-parse HEAD)" = "$commit"
+          }
+          fetch_commit https://github.com/OnePlusOSS/android_kernel_common_oneplus_sm8750.git e1b346b6b4f4096eb342ae3684838a942fd6f6c4 common
+          fetch_commit https://github.com/OnePlusOSS/android_kernel_oneplus_sm8750.git 6028f47faddaa27700f8dd3a1d83906ea8f27170 msm
+          fetch_commit https://github.com/OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_sm8750.git d50b305f7da9e14715a25120a4ac7b1a4b8b97c3 vendor
+          fetch_commit https://github.com/cctv18/android_kernel_common_oneplus_sm8750.git 2a4726b11594dd57d0779d2685fad5c81e5ed553 thirdparty-common
+          fetch_commit https://github.com/OnePlusOSS/kernel_manifest.git f8e50677874c65b6da41057d2f39be7b4ef3c08a manifest
+          df -h "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/report/disk-after-fetch.txt"
+
+      - name: Compare source and capture manifest
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          SRC="$GITHUB_WORKSPACE/src"
+          OUT="$GITHUB_WORKSPACE/report"
+          mkdir -p "$OUT/files" "$OUT/comparison"
+          for repo in common msm vendor thirdparty-common manifest; do
+            if git -C "$SRC/$repo" rev-parse --verify HEAD >/dev/null 2>&1; then
+              {
+                echo "=== $repo ==="
+                git -C "$SRC/$repo" remote -v
+                git -C "$SRC/$repo" show -s --format='%H%n%T%n%ci%n%s' HEAD
+              } > "$OUT/$repo-revision.txt" 2>&1
+            else
+              echo "Fetch not completed" > "$OUT/$repo-revision.txt"
+            fi
+          done
+          git -C "$SRC/manifest" show HEAD:oneplus_13_b.xml > "$OUT/oneplus_13_b.xml" 2> "$OUT/manifest-error.txt" || true
+          for repo in common thirdparty-common; do
+            git -C "$SRC/$repo" ls-tree -r HEAD > "$OUT/comparison/$repo-tree.txt" 2>"$OUT/comparison/$repo-error.txt" || true
+            for path in Makefile build.config.constants build.config.common arch/arm64/configs/gki_defconfig; do
+              mkdir -p "$OUT/files/$repo/$(dirname "$path")"
+              git -C "$SRC/$repo" show "HEAD:$path" > "$OUT/files/$repo/$path" 2>/dev/null || rm -f "$OUT/files/$repo/$path"
+            done
+          done
+          for path in Makefile build.config.constants build.config.common arch/arm64/configs/gki_defconfig; do
+            if [ -f "$OUT/files/common/$path" ] && [ -f "$OUT/files/thirdparty-common/$path" ]; then
+              { echo "=== $path ==="; sha256sum "$OUT/files/common/$path" "$OUT/files/thirdparty-common/$path"; diff -u "$OUT/files/common/$path" "$OUT/files/thirdparty-common/$path" || true; } >> "$OUT/comparison/selected-diffs.txt"
+            fi
+          done
+          for path in vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel vendor/qcom/opensource/wlan/qcacld-3.0/Kbuild vendor/qcom/opensource/wlan/qcacld-3.0/Makefile vendor/qcom/opensource/wlan/qcacld-3.0/wlan_qcacld3_modules.bzl vendor/qcom/opensource/wlan/qcacld-3.0/target_variants.bzl vendor/qcom/opensource/wlan/qcacld-3.0/configs/sun_gki_kiwi-v2_defconfig vendor/qcom/opensource/wlan/qcacld-3.0/configs/sun_consolidate_kiwi-v2_defconfig vendor/qcom/opensource/wlan/platform/wlan_platform_modules.bzl; do
+            mkdir -p "$OUT/files/vendor/$(dirname "$path")"
+            git -C "$SRC/vendor" show "HEAD:$path" > "$OUT/files/vendor/$path" 2>/dev/null || rm -f "$OUT/files/vendor/$path"
+          done
+          git -C "$SRC/vendor" ls-tree -r HEAD > "$OUT/vendor-tree.txt" 2> "$OUT/vendor-tree-error.txt" || true
+          grep -Ei 'kiwi|qcacld|qca-wifi-host-cmn|wlan/platform|wlan/fw-api|wonder|Module\.symvers' "$OUT/vendor-tree.txt" > "$OUT/vendor-wlan-paths.txt" || true
+          grep -E '^[[:space:]]*<project ' "$OUT/oneplus_13_b.xml" > "$OUT/manifest-projects.txt" 2>/dev/null || true
+          df -h "$GITHUB_WORKSPACE" > "$OUT/disk-final.txt"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oneplus13-kiwi-source-comparison
+          path: report/
+          if-no-files-found: warn
+          retention-days: 14
