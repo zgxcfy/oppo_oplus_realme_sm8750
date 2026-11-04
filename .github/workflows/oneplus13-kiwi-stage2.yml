@@ -111,7 +111,7 @@ jobs:
             ls -l "$KP/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
           } > "$REPORT/source-layout.txt"
           cd "$KP"
-          ./tools/bazel query \
+          ./tools/bazel cquery \
             'deps(//vendor/qcom/opensource/wlan/qcacld-3.0:sun_perf_qca_cld_kiwi-v2)' \
             --output=label \
             > "$REPORT/kiwi-deps.txt" \
