@@ -71,7 +71,16 @@ jobs:
             fi
             repo sync -c -j2 --no-tags --fail-fast --no-manifest-update "$path"
           done < "$GITHUB_WORKSPACE/kiwi-stage2/sync-paths.txt"
-          repo manifest -r -o "$GITHUB_WORKSPACE/kiwi-stage2/manifest-locked.xml"
+          # Partial sync intentionally leaves some manifest projects absent.
+          repo manifest -o "$GITHUB_WORKSPACE/kiwi-stage2/manifest-declared-after-sync.xml"
+          {
+            echo "=== common ==="
+            git -C kernel_platform/common rev-parse HEAD
+            echo "=== msm-kernel ==="
+            git -C kernel_platform/msm-kernel rev-parse HEAD
+            echo "=== modules-and-devicetree ==="
+            git -C . rev-parse HEAD
+          } > "$GITHUB_WORKSPACE/kiwi-stage2/checked-out-revisions.txt"
       - name: Verify exact source revisions and Kiwi inputs
         shell: bash
         run: |
