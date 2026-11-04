@@ -71,7 +71,6 @@ jobs:
             fi
             repo sync -c -j2 --no-tags --fail-fast --no-manifest-update "$path"
           done < "$GITHUB_WORKSPACE/kiwi-stage2/sync-paths.txt"
-          # Partial sync intentionally leaves some manifest projects absent.
           repo manifest -o "$GITHUB_WORKSPACE/kiwi-stage2/manifest-declared-after-sync.xml"
           {
             echo "=== common ==="
@@ -79,7 +78,7 @@ jobs:
             echo "=== msm-kernel ==="
             git -C kernel_platform/msm-kernel rev-parse HEAD
             echo "=== modules-and-devicetree ==="
-            git -C . rev-parse HEAD
+            git rev-parse HEAD
           } > "$GITHUB_WORKSPACE/kiwi-stage2/checked-out-revisions.txt"
       - name: Verify exact source revisions and Kiwi inputs
         shell: bash
@@ -96,9 +95,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE/oneplus13/kernel_platform"
-          ./tools/bazel query 'deps(//vendor/qcom/opensource/wlan/qcacld-3.0:sun_perf_qca_cld_kiwi-v2)' --output=label > "$GITHUB_WORKSPACE/kiwi-stage2/kiwi-deps.txt" 2> "$GITHUB_WORKSPACE/kiwi-stage2/bazel-query.log"
-          wc -l "$GITHUB_WORKSPACE/kiwi-stage2/kiwi-deps.txt"
+          ROOT="$GITHUB_WORKSPACE/oneplus13"
+          KP="$ROOT/kernel_platform"
+          REPORT="$GITHUB_WORKSPACE/kiwi-stage2"
+          test -f "$ROOT/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
+          if [ ! -e "$KP/vendor" ] && [ ! -L "$KP/vendor" ]; then
+            ln -s ../vendor "$KP/vendor"
+          fi
+          # Do not replace a pre-existing path; refuse to query the wrong source tree.
+          test "$(readlink -f "$KP/vendor")" = "$(readlink -f "$ROOT/vendor")"
+          test -f "$KP/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
+          {
+            echo "=== Source layout ==="
+            ls -ld "$ROOT/vendor" "$KP/vendor"
+            ls -l "$KP/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
+          } > "$REPORT/source-layout.txt"
+          cd "$KP"
+          ./tools/bazel query \
+            'deps(//vendor/qcom/opensource/wlan/qcacld-3.0:sun_perf_qca_cld_kiwi-v2)' \
+            --output=label \
+            > "$REPORT/kiwi-deps.txt" \
+            2> "$REPORT/bazel-query.log"
+          wc -l "$REPORT/kiwi-deps.txt"
       - name: Collect final diagnostics
         if: always()
         shell: bash
