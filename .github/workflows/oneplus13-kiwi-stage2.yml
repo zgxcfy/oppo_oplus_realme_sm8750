@@ -69,7 +69,7 @@ jobs:
               echo 'Stopping: less than 20 GiB free; this is a pre-project threshold, not a hard quota.' | tee -a "$GITHUB_WORKSPACE/kiwi-stage2/sync-progress.txt"
               exit 1
             fi
-            repo sync -c -j2 --no-tags --fail-fast "$path"
+            repo sync -c -j2 --no-tags --fail-fast --no-manifest-update "$path"
           done < "$GITHUB_WORKSPACE/kiwi-stage2/sync-paths.txt"
           repo manifest -r -o "$GITHUB_WORKSPACE/kiwi-stage2/manifest-locked.xml"
       - name: Verify exact source revisions and Kiwi inputs
