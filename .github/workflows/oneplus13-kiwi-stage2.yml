@@ -98,18 +98,34 @@ jobs:
           ROOT="$GITHUB_WORKSPACE/oneplus13"
           KP="$ROOT/kernel_platform"
           REPORT="$GITHUB_WORKSPACE/kiwi-stage2"
+
           test -f "$ROOT/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
           if [ ! -e "$KP/vendor" ] && [ ! -L "$KP/vendor" ]; then
             ln -s ../vendor "$KP/vendor"
           fi
-          # Do not replace a pre-existing path; refuse to query the wrong source tree.
           test "$(readlink -f "$KP/vendor")" = "$(readlink -f "$ROOT/vendor")"
           test -f "$KP/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
+
+          EXT_SRC="$KP/msm-kernel/msm_kernel_extensions.bzl"
+          EXT_DST="$KP/build/msm_kernel_extensions.bzl"
+          test -f "$EXT_SRC"
+          test -d "$KP/build"
+          if [ -e "$EXT_DST" ]; then
+            cmp -s "$EXT_SRC" "$EXT_DST" || {
+              echo "Existing $EXT_DST differs from $EXT_SRC" >&2
+              exit 1
+            }
+          else
+            cp "$EXT_SRC" "$EXT_DST"
+          fi
+
           {
             echo "=== Source layout ==="
             ls -ld "$ROOT/vendor" "$KP/vendor"
             ls -l "$KP/vendor/qcom/opensource/wlan/qcacld-3.0/BUILD.bazel"
+            sha256sum "$EXT_SRC" "$EXT_DST"
           } > "$REPORT/source-layout.txt"
+
           cd "$KP"
           ./tools/bazel cquery \
             'deps(//vendor/qcom/opensource/wlan/qcacld-3.0:sun_perf_qca_cld_kiwi-v2)' \
